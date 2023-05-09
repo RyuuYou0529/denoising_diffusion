@@ -1,17 +1,17 @@
 import torch
 from torchvision import utils
 
-import math
-
-from accelerate import Accelerator
 from ema_pytorch import EMA
+from accelerate import Accelerator
 
-from abc import ABC, abstractmethod
+import math
 
 def exists(x):
     return x is not None
+
 def has_int_squareroot(num):
     return (math.sqrt(num) ** 2) == num
+
 def num_to_groups(num, divisor):
     groups = num // divisor
     remainder = num % divisor
@@ -20,20 +20,10 @@ def num_to_groups(num, divisor):
         arr.append(remainder)
     return arr
 
-
-class NonLinearOperator(ABC):
-    @abstractmethod
-    def forward(self, data, **kwargs):
-        pass
-
-    def project(self, data, measurement, **kwargs):
-        return data + measurement - self.forward(data)
-
-class InverseProblemOperator(NonLinearOperator):
+class Sampler(object):
     def __init__(
         self,
         diffusion_model,
-        checkpoint_path,
         *,
         ema_update_every = 10,
         ema_decay = 0.995,
@@ -42,10 +32,12 @@ class InverseProblemOperator(NonLinearOperator):
         split_batches = True,
     ):
         # accelerator
+
         self.accelerator = Accelerator(
             split_batches = split_batches,
             mixed_precision = 'fp16' if fp16 else 'no'
         )
+
         self.accelerator.native_amp = amp
 
         # model
@@ -57,8 +49,6 @@ class InverseProblemOperator(NonLinearOperator):
             self.ema.to(self.device)
 
         self.model= self.accelerator.prepare(self.model)
-
-        self.load(checkpoint_path)
 
     @property
     def device(self):
@@ -81,14 +71,24 @@ class InverseProblemOperator(NonLinearOperator):
 
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
-
-    def ddpm_p_sample(self, x, t: int, **kwargs):
-        img, x_start = self.model.p_sample_with_grad(x=x, t=t)
-        return img
-
-    def ddim_p_sample(self, x, t: int, **kwargs):
-        pass
-
-    def forward(self, x, t: int, **kwargs):
-        img, x_start = self.model.p_sample_with_grad(x=x, t=t)
-        return img
+    
+    def sample(self, num_samples = 25, batch_size = 16, return_all_timesteps=False, return_ndarr=False):
+        assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
+        batches = num_to_groups(num_samples, batch_size)
+        
+        with torch.no_grad():
+            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, return_all_timesteps=return_all_timesteps), batches))
+        all_images = torch.cat(all_images_list, dim = 0)
+        if return_all_timesteps:
+            all_images = torch.moveaxis(all_images, 0, 1)
+        
+        if return_ndarr:
+            return all_images.cpu().numpy()
+        else:
+            return all_images
+        
+    def save(self, images, *, path, nrow=None):
+        if nrow is None:
+            nrow = int(math.sqrt(images.shape[0]))
+        # 该方法会把灰度图保存成RGB图
+        utils.save_image(images, path, nrow=nrow)

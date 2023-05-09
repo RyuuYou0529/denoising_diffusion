@@ -5,12 +5,12 @@ from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 import os
 
-from helper_function import *
-from conditioning_method import *
-from mean_processer import *
-from variance_processer import *
-from noiser import *
-from operator import *
+from DPS.helper_function import *
+from DPS.conditioning_method import *
+from DPS.mean_processer import *
+from DPS.variance_processer import *
+from DPS.noiser import *
+from DPS.operator import *
 
 
 
@@ -126,6 +126,7 @@ class DPS:
             img = img.requires_grad_()
             out = self.p_sample(x=img, t=time)
 
+            # 暂时没用
             noisy_measurement = self.q_sample(measurement, t=time)
 
             img, distance = measurement_cond_fn(x_t=out['sample'],
@@ -146,7 +147,7 @@ class DPS:
 
 class DDPM(DPS):
     def p_sample(self, x, t):
-        out = self.p_mean_variance(self.model, x, t)
+        out = self.p_mean_variance(x, t)
         sample = out['mean']
 
         noise = torch.randn_like(x)
@@ -157,7 +158,7 @@ class DDPM(DPS):
 
 class DDIM(DPS):
     def p_sample(self, x, t, eta=0.0):
-        out = self.p_mean_variance(self.model, x, t)
+        out = self.p_mean_variance(x, t)
         
         eps = self.predict_eps_from_x_start(x, t, out['pred_xstart'])
         
@@ -176,7 +177,7 @@ class DDIM(DPS):
         )
 
         sample = mean_pred
-        if t != 0:
+        if t[0] != 0:
             sample += sigma * noise
         
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}

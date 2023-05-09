@@ -12,8 +12,9 @@ import sys
 # data_path = "E:\\Project\\datasets\\CARE\\Isotropic_Liver\\train_data\\data_label.npz"
 data_path = "/home/share/CARE/Isotropic_Liver/train_data/data_label.npz"
 
-load_milestone = True
-load_path = './pretrained/model_100k_steps_lr1e-5.pt'
+load_checkpoint = True
+if_use_path = True
+load_path = '/home/share_ssd/ryuuyou/denoising-diffusion/pretrained_y/model_150k_steps_lr1e-5.pt'
 ##
 
 model = Unet(
@@ -51,9 +52,12 @@ sys.stderr = fh
 original_stdout = sys.stdout
 sys.stdout = fh
 
-if load_milestone:
-    trainer.load(use_path=True, path=load_path)
-trainer.train()
+if load_checkpoint:
+    trainer.load(use_path=if_use_path, path=load_path)
+
+# trainer.train()
+
+trainer.save_unet_only('/home/share_ssd/ryuuyou/denoising-diffusion/unet_checkpoints/y.pt')
 
 sys.stderr = original_stderr
 sys.stdout = original_stdout

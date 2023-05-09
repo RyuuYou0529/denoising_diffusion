@@ -1,4 +1,4 @@
-from helper_function import *
+from DPS.helper_function import *
 
 import numpy as np
 

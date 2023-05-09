@@ -2,7 +2,7 @@ import torch
 
 import numpy as np
 
-from helper_function import *
+from DPS.helper_function import *
 
 class LearnedRangeVarianceProcessor:
     def __init__(self, betas):
