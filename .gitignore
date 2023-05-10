@@ -8,3 +8,7 @@ log.txt
 pretrained_x
 pretrained_y
 unet_checkpoints
+
+*.png
+
+test.ipynb

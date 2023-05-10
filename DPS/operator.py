@@ -1,7 +1,9 @@
 import torch
 from torchvision import utils
+import torchvision.transforms as T
 
 import math
+import cv2 as cv
 
 from accelerate import Accelerator
 from ema_pytorch import EMA
@@ -20,16 +22,7 @@ def num_to_groups(num, divisor):
         arr.append(remainder)
     return arr
 
-
-class NonLinearOperator(ABC):
-    @abstractmethod
-    def forward(self, data, **kwargs):
-        pass
-
-    def project(self, data, measurement, **kwargs):
-        return data + measurement - self.forward(data)
-
-class InverseProblemOperator(NonLinearOperator):
+class InverseProblemOperator:
     def __init__(
         self,
         diffusion_model,
@@ -82,13 +75,40 @@ class InverseProblemOperator(NonLinearOperator):
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
 
-    def ddpm_p_sample(self, x, t: int, **kwargs):
+    def ddpm_p_sample(self, x, t: int):
         img, x_start = self.model.p_sample_with_grad(x=x, t=t)
         return img
 
-    def ddim_p_sample(self, x, t: int, **kwargs):
+    def ddim_p_sample(self, x, t: int):
         pass
 
-    def forward(self, x, t: int, **kwargs):
+    def forward(self, x, t: int, **kwags):
         img, x_start = self.model.p_sample_with_grad(x=x, t=t)
         return img
+
+class AnisotropicOperator:
+    def __init__(self, img_size: tuple=(128, 128), sigma: tuple=(1.5, 0.5), scale_h: int=3, scale_w: int=9) -> None:
+        
+        # kernel_size = math.ceil(2*3*max(sigma))
+        # if kernel_size % 2 == 0:
+        #     kernel_size+=1
+        # self.kernel_size = (kernel_size, kernel_size)
+
+        self.down_size = (img_size[0]//scale_h, img_size[1]//scale_w)
+        self.up_size = img_size
+
+        self.transform = T.Compose([
+            T.GaussianBlur(kernel_size=(5,5), sigma=1),
+            T.Resize(size=self.down_size),
+            T.Resize(size=self.up_size)
+        ])
+
+    def forward(self, x, noise_sigma=0.1, **kwags):
+        return self.transform(x+torch.randn_like(x, device=x.device) * noise_sigma)
+
+class DenoiseOperator:
+    def __init__(self, device):
+        self.device = device
+    
+    def forward(self, x, **kwags):
+        return x

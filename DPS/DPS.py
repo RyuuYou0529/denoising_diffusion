@@ -12,30 +12,31 @@ from DPS.variance_processer import *
 from DPS.noiser import *
 from DPS.operator import *
 
-
-
-class DPS:
+class GaussianDiffusion:
     def __init__(self, 
                  model_hr, operator, noiser,
                  timesteps, 
-                 beta_schedule, 
+                 beta_schedule,
+                 given_betas = None,
                  schedule_fn_kwargs=dict()) -> None:
         
         self.model = model_hr
         self.operator = operator
         self.noiser = noiser,
 
-        if beta_schedule == 'linear':
-            beta_schedule_fn = linear_beta_schedule
-        elif beta_schedule == 'cosine':
-            beta_schedule_fn = cosine_beta_schedule
-        elif beta_schedule == 'sigmoid':
-            beta_schedule_fn = sigmoid_beta_schedule
+        if given_betas is None:
+            if beta_schedule == 'linear':
+                beta_schedule_fn = linear_beta_schedule
+            elif beta_schedule == 'cosine':
+                beta_schedule_fn = cosine_beta_schedule
+            elif beta_schedule == 'sigmoid':
+                beta_schedule_fn = sigmoid_beta_schedule
+            else:
+                raise ValueError(f'unknown beta schedule {beta_schedule}')
+            self.betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs).cpu().numpy()
         else:
-            raise ValueError(f'unknown beta schedule {beta_schedule}')
+            self.betas = given_betas
 
-        betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs).cpu().numpy()
-        self.betas = betas
         self.num_timesteps = int(self.betas.shape[0])
 
         alphas = 1.0 - self.betas
@@ -53,7 +54,7 @@ class DPS:
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
         self.posterior_variance = (
-            betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+            self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         )
         # log calculation clipped because the posterior variance is 0 at the
         # beginning of the diffusion chain.
@@ -61,7 +62,7 @@ class DPS:
             np.append(self.posterior_variance[1], self.posterior_variance[1:])
         )
         self.posterior_mean_coef1 = (
-            betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+            self.betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         )
         self.posterior_mean_coef2 = (
             (1.0 - self.alphas_cumprod_prev)
@@ -126,12 +127,8 @@ class DPS:
             img = img.requires_grad_()
             out = self.p_sample(x=img, t=time)
 
-            # 暂时没用
-            noisy_measurement = self.q_sample(measurement, t=time)
-
             img, distance = measurement_cond_fn(x_t=out['sample'],
                                       measurement=measurement,
-                                      noisy_measurement=noisy_measurement,
                                       x_prev=img,
                                       x_0_hat=out['pred_xstart'],
                                       t=idx)
@@ -144,19 +141,92 @@ class DPS:
         
         return img
 
+# ===============================================================================
 
-class DDPM(DPS):
+class _WrappedModel:
+    def __init__(self, model, timestep_map, original_num_steps):
+        self.model = model
+        self.timestep_map = timestep_map
+        self.original_num_steps = original_num_steps
+
+    def __call__(self, x, time, **kwargs):
+        map_tensor = torch.tensor(self.timestep_map, device=time.device, dtype=time.dtype)
+        new_ts = map_tensor[time]
+        return self.model(x, new_ts, **kwargs)
+
+def space_timesteps(num_timesteps, section_counts):
+    section_counts = [section_counts]
+    
+    size_per = num_timesteps // len(section_counts)
+    extra = num_timesteps % len(section_counts)
+    start_idx = 0
+    all_steps = []
+    for i, section_count in enumerate(section_counts):
+        size = size_per + (1 if i < extra else 0)
+        if size < section_count:
+            raise ValueError(
+                f"cannot divide section of {size} steps into {section_count}"
+            )
+        if section_count <= 1:
+            frac_stride = 1
+        else:
+            frac_stride = (size - 1) / (section_count - 1)
+        cur_idx = 0.0
+        taken_steps = []
+        for _ in range(section_count):
+            taken_steps.append(start_idx + round(cur_idx))
+            cur_idx += frac_stride
+        all_steps += taken_steps
+        start_idx += size
+    return set(all_steps)
+
+# ===============================================================================
+
+class DDPM(GaussianDiffusion):
     def p_sample(self, x, t):
         out = self.p_mean_variance(x, t)
         sample = out['mean']
 
         noise = torch.randn_like(x)
-        if t != 0:  # no noise when t == 0
+        if t[0] != 0:  # no noise when t == 0
             sample += torch.exp(0.5 * out['log_variance']) * noise
 
         return {'sample': sample, 'pred_xstart': out['pred_xstart']}
 
-class DDIM(DPS):
+class DDIM(GaussianDiffusion):
+    def __init__(self, ddim_steps: int, **kwargs):
+        use_timesteps = space_timesteps(kwargs["timesteps"], ddim_steps)
+        self.use_timesteps = set(use_timesteps)
+        self.timestep_map = []
+        self.original_num_steps = kwargs["timesteps"]
+
+        base_diffusion = GaussianDiffusion(**kwargs)  # pylint: disable=missing-kwoa
+        last_alpha_cumprod = 1.0
+        new_betas = []
+        for i, alpha_cumprod in enumerate(base_diffusion.alphas_cumprod):
+            if i in self.use_timesteps:
+                new_betas.append(1 - alpha_cumprod / last_alpha_cumprod)
+                last_alpha_cumprod = alpha_cumprod
+                self.timestep_map.append(i)
+        
+        kwargs["given_betas"] = np.array(new_betas)
+
+        super().__init__(**kwargs)
+
+        self.model = self._wrap_model(self.model)
+
+    def p_mean_variance(
+        self, *args, **kwargs
+    ):  # pylint: disable=signature-differs
+        return super().p_mean_variance(*args, **kwargs)
+
+    def _wrap_model(self, model):
+        if isinstance(model, _WrappedModel):
+            return model
+        return _WrappedModel(
+            model, self.timestep_map, self.original_num_steps
+        )
+
     def p_sample(self, x, t, eta=0.0):
         out = self.p_mean_variance(x, t)
         
@@ -186,3 +256,5 @@ class DDIM(DPS):
         coef1 = extract_and_expand(self.sqrt_recip_alphas_cumprod, t, x_t)
         coef2 = extract_and_expand(self.sqrt_recipm1_alphas_cumprod, t, x_t)
         return (coef1 * x_t - pred_xstart) / coef2
+
+# ===============================================================================
