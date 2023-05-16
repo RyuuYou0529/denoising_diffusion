@@ -113,8 +113,9 @@ class GaussianDiffusion:
         raise NotImplementedError
     
     # 后验采样循环,调用了p_sample
-    def p_sample_loop(self, x_start, measurement, record, save_root):
-        img = x_start       
+    def p_sample_loop(self, x_start, measurement, record):
+        img = x_start
+        utils.save_image(img, f'./out/record/999.png', nrow=int(np.sqrt(img.shape[0])))
         device = x_start.device
 
         cond_method = PosteriorSampling(operator=self.operator, noiser=self.noiser)
@@ -133,9 +134,8 @@ class GaussianDiffusion:
                                       x_0_hat=out['pred_xstart'],
                                       t=idx)
             if record:
-                if idx % 10 == 0:
-                    file_path = os.path.join(save_root, f"progress/x_{str(idx).zfill(4)}.png")
-                    plt.imsave(file_path, clear_color(img))
+                if idx % 100 == 0:
+                    utils.save_image(img, f'./out/record/{idx}.png', nrow=int(np.sqrt(img.shape[0])))
             
             img = img.detach_()
         

@@ -24,6 +24,7 @@ class PosteriorSampling(ConditioningMethod):
         self.scale = kwargs.get('scale', 1.0)
 
     def conditioning(self, x_prev, x_t, x_0_hat, measurement, t):
-        norm_grad, norm = self.grad_and_value(x_prev=x_prev, x_0_hat=x_0_hat, measurement=measurement, t=t)
+        norm_grad, norm = self.grad_and_value(x_prev=x_prev, x_0_hat=x_0_hat, measurement=measurement, t=t) 
         x_t -= norm_grad * self.scale
         return x_t, norm
+        # return x_t, None

@@ -67,7 +67,7 @@ class Sampler(object):
             self.ema.load_state_dict(data["ema"])
 
         if 'version' in data:
-            print(f"loading from version {data['version']}")
+            print(f"loading from: [version]:{data['version']}; [step]:{data['step']}")
 
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
@@ -86,7 +86,18 @@ class Sampler(object):
             return all_images.cpu().numpy()
         else:
             return all_images
+    
+    def dps(self, measurement, operator, return_all_timesteps=False, return_ndarr=False):
+        all_images = self.ema.ema_model.dps(measurement=measurement, operator=operator, return_all_timesteps=return_all_timesteps)
         
+        if return_all_timesteps:
+            all_images = torch.moveaxis(all_images, 0, 1)
+        
+        if return_ndarr:
+            return all_images.cpu().numpy()
+        else:
+            return all_images
+
     def save(self, images, *, path, nrow=None):
         if nrow is None:
             nrow = int(math.sqrt(images.shape[0]))

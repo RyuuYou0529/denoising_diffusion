@@ -2,3 +2,6 @@ from denoising_diffusion_pytorch.denoising_diffusion_pytorch import GaussianDiff
 
 from denoising_diffusion_pytorch.sampler import Sampler
 
+from denoising_diffusion_pytorch.diffusion_posterior_sample import DPS
+
+from denoising_diffusion_pytorch.degradation_operator import InverseProblemOperator, AnisotropicOperator, DenoiseOperator

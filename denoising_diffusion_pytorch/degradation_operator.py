@@ -2,8 +2,10 @@ import torch
 from torchvision import utils
 import torchvision.transforms as T
 
+import numpy as np
 import math
 import cv2 as cv
+from astropy.convolution import Gaussian2DKernel
 
 from accelerate import Accelerator
 from ema_pytorch import EMA
@@ -93,24 +95,33 @@ class InverseProblemOperator(Operator):
         return img
 
 class AnisotropicOperator(Operator):
-    def __init__(self, img_size: tuple=(128, 128), sigma: tuple=(1.5, 0.5), scale_h: int=3, scale_w: int=9) -> None:
-        
-        # kernel_size = math.ceil(2*3*max(sigma))
-        # if kernel_size % 2 == 0:
-        #     kernel_size+=1
-        # self.kernel_size = (kernel_size, kernel_size)
+    def __init__(self, img_shape: tuple, sigma: tuple=(1.5, 0.5), scale: tuple=(3,12), noise_sigma=0.1,) -> None:
+        b, c, h, w = img_shape
+        self.noise_sigma = noise_sigma
 
-        self.down_size = (img_size[0]//scale_h, img_size[1]//scale_w)
-        self.up_size = img_size
+        kernel_size = math.ceil(2*3*max(sigma))
+        if kernel_size % 2 == 0:
+            kernel_size+=1
+        kernel = Gaussian2DKernel(x_stddev=sigma[0], y_stddev=sigma[1], x_size=kernel_size, y_size=kernel_size)
+        kernel.normalize()
+        kernel = torch.from_numpy(kernel.array).float()
+        kernel = kernel.view(1, 1, kernel_size, kernel_size)
+        self.kernel = kernel.repeat(1, c, 1, 1)
 
-        self.transform = T.Compose([
-            T.GaussianBlur(kernel_size=(5,5), sigma=1),
-            T.Resize(size=self.down_size),
-            T.Resize(size=self.up_size)
+        scale_h, scale_w = scale
+        down_size = (h//scale_h, w//scale_w)
+        up_size = (h, w)
+        self.resize = T.Compose([
+            # T.Lambda(lambda x:x+torch.randn_like(x, device=x.device)*self.noise_sigma),
+            T.Resize(size=down_size, antialias=False),
+            T.Resize(size=up_size, antialias=False),
         ])
 
-    def forward(self, x, noise_sigma=0.1, **kwags):
-        return self.transform(x+torch.randn_like(x, device=x.device) * noise_sigma)
+    def forward(self, x, **kwags):
+        x = torch.nn.functional.conv2d(x, self.kernel.to(x.device))
+        x = self.resize(x)
+        x = x+torch.randn_like(x, device=x.device)*self.noise_sigma
+        return x
 
 class DenoiseOperator(Operator):
     def __init__(self):

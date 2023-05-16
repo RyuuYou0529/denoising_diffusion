@@ -12,3 +12,5 @@ unet_checkpoints
 *.png
 
 test.ipynb
+
+out/
