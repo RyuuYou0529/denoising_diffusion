@@ -1,16 +1,13 @@
+# folder
 __pycache__
-
-results_x
-results_y
-
-log.txt
-
+unet_checkpoints
 pretrained_x
 pretrained_y
-unet_checkpoints
+results_x
+results_y
+out
 
+# file
+log.txt
 *.png
-
 test.ipynb
-
-out/
