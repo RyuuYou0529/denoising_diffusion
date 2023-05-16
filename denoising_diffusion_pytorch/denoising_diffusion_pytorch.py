@@ -33,7 +33,9 @@ from denoising_diffusion_pytorch.version import __version__
 
 ModelPrediction =  namedtuple('ModelPrediction', ['pred_noise', 'pred_x_start'])
 
+# ====================
 # helpers functions
+# ====================
 
 def exists(x):
     return x is not None
@@ -67,7 +69,9 @@ def convert_image_to_fn(img_type, image):
         return image.convert(img_type)
     return image
 
+# ====================
 # normalization functions
+# ====================
 
 def normalize_to_neg_one_to_one(img):
     return img * 2 - 1
@@ -75,7 +79,9 @@ def normalize_to_neg_one_to_one(img):
 def unnormalize_to_zero_to_one(t):
     return (t + 1) * 0.5
 
+# ====================
 # small helper modules
+# ====================
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -133,7 +139,9 @@ class PreNorm(nn.Module):
         x = self.norm(x)
         return self.fn(x)
 
+# ====================
 # sinusoidal positional embeds
+# ====================
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
@@ -166,7 +174,9 @@ class RandomOrLearnedSinusoidalPosEmb(nn.Module):
         fouriered = torch.cat((x, fouriered), dim = -1)
         return fouriered
 
+# ====================
 # building block modules
+# ====================
 
 class Block(nn.Module):
     def __init__(self, dim, dim_out, groups = 8):
@@ -266,7 +276,9 @@ class Attention(nn.Module):
         out = rearrange(out, 'b h (x y) d -> b (h d) x y', x = h, y = w)
         return self.to_out(out)
 
+# ====================
 # model
+# ====================
 
 class Unet(nn.Module):
     def __init__(
@@ -397,7 +409,9 @@ class Unet(nn.Module):
         x = self.final_res_block(x, t)
         return self.final_conv(x)
 
-# gaussian diffusion trainer class
+# ====================
+# gaussian diffusion class
+# ====================
 
 def extract(a, t, x_shape):
     b, *_ = t.shape
@@ -779,7 +793,9 @@ class GaussianDiffusion(nn.Module):
         img = self.normalize(img)
         return self.p_losses(img, t, *args, **kwargs)
 
+# ====================
 # dataset classes
+# ====================
 
 class Dataset(Dataset):
     def __init__(
@@ -812,8 +828,11 @@ class Dataset(Dataset):
         path = self.paths[index]
         img = Image.open(path)
         return self.transform(img)
-
+    
+# ====================
 # npz dataloader
+# ====================
+
 import numpy as np
 class npz_dataset(Dataset):
     def __init__(
@@ -841,10 +860,14 @@ class npz_dataset(Dataset):
     def __getitem__(self, index):
         return self.transform(self.data[index])
 
+# ====================
 # lr scheduler
+# ====================
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+# ====================
 # trainer class
+# ====================
 
 class Trainer(object):
     def __init__(

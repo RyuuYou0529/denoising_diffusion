@@ -1,6 +1,11 @@
 from denoising_diffusion_pytorch.denoising_diffusion_pytorch import *
 
+# ====================
+# DPS Class
+# ====================
 class DPS(GaussianDiffusion):
+
+    # 带梯度的p_sample
     # todo: original_func = decorated_func.__wrapped__
     def p_sample_with_grad(self, x, t: int, x_self_cond = None):
         b, *_, device = *x.shape, x.device
@@ -10,6 +15,7 @@ class DPS(GaussianDiffusion):
         pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
         return pred_img, x_start
 
+    # 计算梯度
     def grad_and_value(self, x_prev, x_0_hat, measurement, t):
         difference = measurement - self.operator.forward(x=x_0_hat, t=t)
         norm = torch.linalg.norm(difference)
@@ -17,6 +23,7 @@ class DPS(GaussianDiffusion):
              
         return norm_grad, norm
     
+    # DDPM
     def dps_ddpm(self, shape, measurement, scale=1, return_all_timesteps = False):
         batch, device = shape[0], self.betas.device
 
@@ -43,6 +50,7 @@ class DPS(GaussianDiffusion):
         res = self.unnormalize(res)
         return res
 
+    # DDIM
     def dps_ddim(self, shape, measurement, scale=1, return_all_timesteps = False):
         batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
 
@@ -92,8 +100,10 @@ class DPS(GaussianDiffusion):
         res = self.unnormalize(res)
         return res
 
+    # DPS采样的封装
     def dps(self, measurement, operator, return_all_timesteps = False):
         self.operator = operator
+        # sample steps小于1k时用DDIM，大于等于1k时用DDPM
         sample_fn = self.dps_ddpm if not self.is_ddim_sampling else self.dps_ddim
         return sample_fn(shape=measurement.shape, measurement=measurement,
                          return_all_timesteps = return_all_timesteps)

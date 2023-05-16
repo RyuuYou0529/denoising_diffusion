@@ -24,13 +24,16 @@ def num_to_groups(num, divisor):
         arr.append(remainder)
     return arr
 
+# 抽象父类
 class Operator(ABC):
     @abstractmethod
     def forward(self, data, **kwargs):
         # calculate A * X
         pass
 
-class InverseProblemOperator(Operator):
+# 利用扩散模型做退化的退化模型
+# (暂时弃用，未完善)
+class DiffusionOperator(Operator):
     def __init__(
         self,
         diffusion_model,
@@ -94,6 +97,7 @@ class InverseProblemOperator(Operator):
         img, x_start = self.model.p_sample_with_grad(x=x, t=t)
         return img
 
+# 各向异性退化
 class AnisotropicOperator(Operator):
     def __init__(self, img_shape: tuple, sigma: tuple=(1.5, 0.5), scale: tuple=(3,12), noise_sigma=0.1,) -> None:
         b, c, h, w = img_shape
@@ -123,6 +127,7 @@ class AnisotropicOperator(Operator):
         x = x+torch.randn_like(x, device=x.device)*self.noise_sigma
         return x
 
+# 去噪退化
 class DenoiseOperator(Operator):
     def __init__(self):
         pass
