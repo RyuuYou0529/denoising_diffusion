@@ -5,6 +5,7 @@ from ema_pytorch import EMA
 from accelerate import Accelerator
 
 import math
+import os
 
 def exists(x):
     return x is not None
@@ -32,12 +33,10 @@ class Sampler(object):
         split_batches = True,
     ):
         # accelerator
-
         self.accelerator = Accelerator(
             split_batches = split_batches,
             mixed_precision = 'fp16' if fp16 else 'no'
         )
-
         self.accelerator.native_amp = amp
 
         # model
@@ -78,8 +77,10 @@ class Sampler(object):
         
         with torch.no_grad():
             all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, return_all_timesteps=return_all_timesteps), batches))
+        # [n, (t), c, h, w]
         all_images = torch.cat(all_images_list, dim = 0)
         if return_all_timesteps:
+            # [n, t, c, h, w] -> [t, n, c, h, w]
             all_images = torch.moveaxis(all_images, 0, 1)
         
         if return_ndarr:
@@ -87,11 +88,18 @@ class Sampler(object):
         else:
             return all_images
     
-    def dps(self, measurement, operator, return_all_timesteps=False, return_ndarr=False):
-        all_images = self.ema.ema_model.dps(measurement=measurement, operator=operator, return_all_timesteps=return_all_timesteps)
+    def dps(self, measurement, operator, num_samples=16, return_all_timesteps=False, return_ndarr=False):
+        # [n, (t), c, h, w] or [b, n, (t), c, h, w]
+        all_images = self.ema.ema_model.dps(measurement=measurement, operator=operator, 
+                                            num_samples=num_samples, return_all_timesteps=return_all_timesteps)
         
         if return_all_timesteps:
-            all_images = torch.moveaxis(all_images, 0, 1)
+            if measurement.shape[0] == 1:
+                # [n, t, c, h, w] -> [t, n, c, h, w]
+                all_images = torch.moveaxis(all_images, 0, 1)
+            else:
+                # [b, n, t, c, h, w] -> [b, t, n, c, h, w]
+                all_images = torch.moveaxis(all_images, 1, 2)
         
         if return_ndarr:
             return all_images.cpu().numpy()
@@ -99,7 +107,29 @@ class Sampler(object):
             return all_images
 
     def save(self, images, *, path, nrow=None):
+        # images [n(b), c, h, w]
         if nrow is None:
             nrow = int(math.sqrt(images.shape[0]))
         # 该方法会把灰度图保存成RGB图
         utils.save_image(images, path, nrow=nrow)
+    
+    def save_with_records(self, images, *, folder, nrow=None):
+        # common: [t, n, c, h, w]
+        # dps: [t, n, c, h, w] or [b, t, n, c, h, w]
+
+        # [t, n, c, h, w]
+        if len(images.shape) == 5:
+            if nrow is None:
+                nrow = int(math.sqrt(images.shape[1]))
+            for t, item in enumerate(images):
+                utils.save_image(item, os.path.join(folder, f'{t}.png'), nrow=nrow)
+        
+        # [b, t, n, c, h, w]
+        elif len(images.shape) == 6:
+            if nrow is None:
+                nrow = int(math.sqrt(images.shape[2]))
+            for index, batch in enumerate(images):
+                for t, item in enumerate(batch):
+                    utils.save_image(item, os.path.join(folder, f'batch_{index}/',f'{t}.png'), nrow=nrow)
+
+        

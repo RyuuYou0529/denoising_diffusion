@@ -101,9 +101,20 @@ class DPS(GaussianDiffusion):
         return res
 
     # DPS采样的封装
-    def dps(self, measurement, operator, return_all_timesteps = False):
+    def dps(self, measurement, operator, num_samples=16, return_all_timesteps = False):
+        b, c, h, w = measurement.shape
         self.operator = operator
         # sample steps小于1k时用DDIM，大于等于1k时用DDPM
         sample_fn = self.dps_ddpm if not self.is_ddim_sampling else self.dps_ddim
-        return sample_fn(shape=measurement.shape, measurement=measurement,
-                         return_all_timesteps = return_all_timesteps)
+        
+        # [n, (t), c, h, w]
+        if b == 1:
+            return sample_fn(shape=(num_samples, c, h, w), measurement=measurement,
+                             return_all_timesteps = return_all_timesteps)
+        # [b, n, (t), c, h, w]
+        else:
+            res = []
+            for i in range(b):
+                res.append(sample_fn(shape=(num_samples, c, h, w), measurement=measurement[i], 
+                                    return_all_timesteps = return_all_timesteps))
+            return torch.cat(res, dim=0)
