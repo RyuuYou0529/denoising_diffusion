@@ -6,6 +6,8 @@ from accelerate import Accelerator
 
 import math
 import os
+import tifffile as tiff
+import numpy as np
 
 def exists(x):
     return x is not None
@@ -88,10 +90,11 @@ class Sampler(object):
         else:
             return all_images
     
-    def dps(self, measurement, operator, num_samples=16, return_all_timesteps=False, return_ndarr=False):
+    def dps(self, measurement, operator, num_samples=16, scale=1, return_all_timesteps=False, return_ndarr=False):
         # [n, (t), c, h, w] or [b, n, (t), c, h, w]
         all_images = self.ema.ema_model.dps(measurement=measurement, operator=operator, 
-                                            num_samples=num_samples, return_all_timesteps=return_all_timesteps)
+                                            num_samples=num_samples, scale=scale, 
+                                            return_all_timesteps=return_all_timesteps)
         
         if return_all_timesteps:
             if measurement.shape[0] == 1:
@@ -106,14 +109,19 @@ class Sampler(object):
         else:
             return all_images
 
-    def save(self, images, *, path, nrow=None):
+    def save_png(self, images, *, path, nrow=None):
         # images [n(b), c, h, w]
         if nrow is None:
             nrow = int(math.sqrt(images.shape[0]))
         # 该方法会把灰度图保存成RGB图
         utils.save_image(images, path, nrow=nrow)
+
+    def save_tif(self, images, *, path, **kwags):
+        # images [n(b), c, h, w]
+        res = images.detach().cpu().numpy()
+        tiff.imwrite(path, res, **kwags)
     
-    def save_with_records(self, images, *, folder, nrow=None):
+    def save_png_with_records(self, images, *, folder, nrow=None, step=1):
         # common: [t, n, c, h, w]
         # dps: [t, n, c, h, w] or [b, t, n, c, h, w]
 
@@ -122,7 +130,8 @@ class Sampler(object):
             if nrow is None:
                 nrow = int(math.sqrt(images.shape[1]))
             for t, item in enumerate(images):
-                utils.save_image(item, os.path.join(folder, f'{t}.png'), nrow=nrow)
+                if t%step==0:
+                    utils.save_image(item, os.path.join(folder, f'{t}.png'), nrow=nrow)
         
         # [b, t, n, c, h, w]
         elif len(images.shape) == 6:
@@ -130,6 +139,35 @@ class Sampler(object):
                 nrow = int(math.sqrt(images.shape[2]))
             for index, batch in enumerate(images):
                 for t, item in enumerate(batch):
-                    utils.save_image(item, os.path.join(folder, f'batch_{index}/',f'{t}.png'), nrow=nrow)
+                    if t%step==0:
+                        utils.save_image(item, os.path.join(folder, f'batch_{index}/',f'{t}.png'), nrow=nrow)
+        
+    def save_tif_with_records(self, images, *, folder, step=1, padding=0, **kwargs):
+        # common: [t, n, c, h, w]
+        # dps: [t, n, c, h, w] or [b, t, n, c, h, w]
+
+        # [t, n, c, h, w]
+        res = []
+        if len(images.shape) == 5:
+            t, n, c, h, w = images.shape
+            for time, item in enumerate(images):
+                if time%step==0 or time==t-1:
+                    grid = utils.make_grid(item, nrow=int(math.sqrt(n)), padding=padding)
+                    if c == 1:
+                        grid=grid[0]
+                    res.append(grid.detach().cpu().numpy())
+            tiff.imwrite(os.path.join(folder, 'records_one_batch.tif'), np.asarray(res), **kwargs)
+        
+        # [b, t, n, c, h, w]
+        elif len(images.shape) == 6:
+            b, t, n, c, h, w = images.shape
+            for index, batch in enumerate(images):
+                for time, item in enumerate(batch):
+                    if time%step==0 or time==t-1:
+                        grid = utils.make_grid(item, nrow=int(math.sqrt(n)), padding=padding)
+                        if c == 1:
+                            grid=grid[0]
+                        res.append(grid.detach().cpu().numpy())
+                tiff.imwrite(os.path.join(folder, f'multi_batch/', f'batch_{index}_{t}.png'), np.asarray(res), **kwargs)
 
         

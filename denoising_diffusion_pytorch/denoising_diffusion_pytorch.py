@@ -858,7 +858,10 @@ class npz_dataset(Dataset):
         return self.data.size(0)
     
     def __getitem__(self, index):
-        return self.transform(self.data[index])
+        item = self.data[index]
+        # item = (item-item.min()) / (item.max()-item.min())
+        item = item / 65535
+        return self.transform(item)
 
 # ====================
 # lr scheduler

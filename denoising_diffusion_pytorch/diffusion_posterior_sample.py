@@ -53,7 +53,7 @@ class DPS(GaussianDiffusion):
     # DDIM
     def dps_ddim(self, shape, measurement, scale=1, return_all_timesteps = False):
         batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
-
+        
         times = torch.linspace(-1, total_timesteps - 1, steps = sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
         time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
@@ -62,7 +62,7 @@ class DPS(GaussianDiffusion):
         imgs = [x_t]
 
         x_start = None
-
+        
         for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device = device, dtype = torch.long)
             self_cond = x_start if self.self_condition else None
@@ -88,8 +88,14 @@ class DPS(GaussianDiffusion):
                   c * pred_noise + \
                   sigma * noise
             
-            norm_grad, norm  = self.grad_and_value(x_prev=x_t, x_0_hat=x_start, measurement=measurement, t=time)
+            measurement_t = measurement
+            # measurement_t = self.sqrt_alphas_cumprod[time]*measurement \
+            #                 + self.sqrt_one_minus_alphas_cumprod[time]*self.operator.forward(x=noise)
+
+            norm_grad, norm  = self.grad_and_value(x_prev=x_t, x_0_hat=x_start, measurement=measurement_t, t=time)
             x_tm1 -= norm_grad*scale
+            # x_tm1 -= norm_grad*scale*(time/total_timesteps)
+            # x_tm1 = self.operator.forward(x=x_tm1, t=time)
             x_tm1 = x_tm1.detach_()
 
             imgs.append(x_tm1)
@@ -101,7 +107,7 @@ class DPS(GaussianDiffusion):
         return res
 
     # DPS采样的封装
-    def dps(self, measurement, operator, num_samples=16, return_all_timesteps = False):
+    def dps(self, measurement, operator, num_samples=16, scale=1, return_all_timesteps = False):
         b, c, h, w = measurement.shape
         self.operator = operator
         # sample steps小于1k时用DDIM，大于等于1k时用DDPM
@@ -109,12 +115,12 @@ class DPS(GaussianDiffusion):
         
         # [n, (t), c, h, w]
         if b == 1:
-            return sample_fn(shape=(num_samples, c, h, w), measurement=measurement,
-                             return_all_timesteps = return_all_timesteps)
+            return sample_fn(shape=(num_samples, c, h, w), measurement=measurement, 
+                             scale=scale, return_all_timesteps = return_all_timesteps)
         # [b, n, (t), c, h, w]
         else:
             res = []
             for i in range(b):
-                res.append(sample_fn(shape=(num_samples, c, h, w), measurement=measurement[i], 
-                                    return_all_timesteps = return_all_timesteps))
+                res.append(sample_fn(shape=(num_samples, c, h, w), measurement=measurement[i],
+                                     scale=scale, return_all_timesteps = return_all_timesteps))
             return torch.cat(res, dim=0)

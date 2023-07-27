@@ -1,6 +1,5 @@
 import torch
 from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
-from torch.utils.data import Dataset, DataLoader
 
 import warnings
 warnings.simplefilter("ignore", UserWarning)
@@ -57,7 +56,7 @@ if load_checkpoint:
 
 # trainer.train()
 
-trainer.save_unet_only('/home/share_ssd/ryuuyou/denoising-diffusion/unet_checkpoints/x.pt')
+# trainer.save_unet_only('/home/share_ssd/ryuuyou/denoising-diffusion/unet_checkpoints/x.pt')
 
 sys.stderr = original_stderr
 sys.stdout = original_stdout
