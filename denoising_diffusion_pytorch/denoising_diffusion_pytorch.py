@@ -466,8 +466,9 @@ class GaussianDiffusion(nn.Module):
         objective = 'pred_noise',
         beta_schedule = 'sigmoid',
         schedule_fn_kwargs = dict(),
+        is_ddim_sampling: bool=True,
         ddim_sampling_eta = 0.,
-        auto_normalize = True,
+        auto_normalize = False,
         min_snr_loss_weight = False, # https://arxiv.org/abs/2303.09556
         min_snr_gamma = 5
     ):
@@ -510,7 +511,7 @@ class GaussianDiffusion(nn.Module):
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
 
         assert self.sampling_timesteps <= timesteps
-        self.is_ddim_sampling = self.sampling_timesteps < timesteps
+        self.is_ddim_sampling = is_ddim_sampling
         self.ddim_sampling_eta = ddim_sampling_eta
 
         # helper function to register buffer from float64 to float32
@@ -835,33 +836,29 @@ class Dataset(Dataset):
 
 import numpy as np
 class npz_dataset(Dataset):
-    def __init__(
-        self,
-        path,
-        image_size,
-        npz_file_name,
-        augment_horizontal_flip = False,
-        convert_image_to = None
-    ):
-        maybe_convert_fn = partial(convert_image_to_fn, convert_image_to) if exists(convert_image_to) else nn.Identity()
-        self.transform = T.Compose([
-            T.Lambda(maybe_convert_fn),
-            T.Resize(image_size),
-            T.RandomHorizontalFlip() if augment_horizontal_flip else nn.Identity(),
-            T.CenterCrop(image_size)
-        ])
-
+    def __init__(self, path, npz_file_name, normalize_mode: str='min_max'):
         file = np.load(path)
         self.data = torch.from_numpy(file[npz_file_name])
+        self.len = self.data.shape[0]
+
+        self.normalize = lambda t:(t-t.mean())/(t.std())
+        self.scale = lambda t:(t - t.min())/(t.max()-t.min())
+        self.normalize_mode = normalize_mode
+
+        assert normalize_mode in ['z_score', 'min_max', None], 'Invalid args: "normalize_mode"'
+        if normalize_mode == 'z_score':
+            self.normalize = lambda t:(t-t.mean())/(t.std())
+        elif normalize_mode == 'min_max':
+            self.normalize = lambda t:(t - t.min())/(t.max()-t.min())
+        else:
+            self.normalize = identity
 
     def __len__(self):
-        return self.data.size(0)
+        return self.len
     
     def __getitem__(self, index):
-        item = self.data[index]
-        # item = (item-item.min()) / (item.max()-item.min())
-        item = item / 65535
-        return self.transform(item)
+        item = self.normalize(self.data[index])
+        return item
 
 # ====================
 # lr scheduler
@@ -878,8 +875,9 @@ class Trainer(object):
         diffusion_model,
         path,
         *,
-        if_npz = True,
+        dataset_type: str='npz',
         npz_file_name = 'Y',
+        normalize_mode = 'min_max',
         if_lr_scheduler = False,
         train_batch_size = 16,
         gradient_accumulate_every = 1,
@@ -938,12 +936,12 @@ class Trainer(object):
         self.image_size = diffusion_model.image_size
 
         # dataset and dataloader
-        if if_npz:
-            self.ds = npz_dataset(path=path, image_size=self.image_size, npz_file_name=npz_file_name, augment_horizontal_flip=augment_horizontal_flip, 
-                                  convert_image_to=convert_image_to)
-        else:
+        assert dataset_type in ['npz', 'folder'], 'Invalid args: [data_type]'
+        if dataset_type == 'npz':
+            self.ds = npz_dataset(path=path, npz_file_name=npz_file_name, normalize_mode=normalize_mode)
+        elif dataset_type == 'folder':
             self.ds = Dataset(path, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
-        
+
         dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
 
         dl = self.accelerator.prepare(dl)

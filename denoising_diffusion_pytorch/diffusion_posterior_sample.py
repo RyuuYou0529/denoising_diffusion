@@ -47,7 +47,6 @@ class DPS(GaussianDiffusion):
 
         res = x_start if not return_all_timesteps else torch.stack(imgs, dim = 1)
 
-        res = self.unnormalize(res)
         return res
 
     # DDIM
@@ -103,7 +102,6 @@ class DPS(GaussianDiffusion):
 
         res = x_tm1 if not return_all_timesteps else torch.stack(imgs, dim = 1)
 
-        res = self.unnormalize(res)
         return res
 
     # DPS采样的封装

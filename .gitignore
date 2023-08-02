@@ -2,9 +2,7 @@
 # cell
 # ======
 __pycache__/
-unet_checkpoints/
-pretrained_x/
-pretrained_y/
+checkpoints/
 
 dps_out
 sample_out
@@ -16,13 +14,3 @@ test.ipynb
 # degradation model
 denoising_diffusion_pytorch/degradation_model/checkpoint
 denoising_diffusion_pytorch/degradation_model/out
-
-# ======
-# dog
-# ======
-pretrained_dog/
-dps_out_dog/
-sample_out_dog/
-train_dog.py
-sample_dog.ipynb
-inference_dog.ipynb

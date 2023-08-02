@@ -3,7 +3,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 def tensor_info(t: torch.Tensor):
-    print(f'shape: {t.shape} \ntype: {t.dtype} \nmax: {t.max()} \nmin: {t.min()} \nmean: {t.mean()}')
+    print(f'shape: {t.shape} \ntype: {t.dtype} \nmax: {t.max()} \
+          \nmin: {t.min()} \nmean: {t.mean()} \nstd: {t.std()}')
 
 def histc(t: torch.Tensor, save_path: str=None, if_show: bool=True):
     b, c, h, w = t.shape

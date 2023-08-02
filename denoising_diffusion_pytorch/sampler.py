@@ -33,6 +33,7 @@ class Sampler(object):
         amp = False,
         fp16 = False,
         split_batches = True,
+        normalize_result=True
     ):
         # accelerator
         self.accelerator = Accelerator(
@@ -50,6 +51,8 @@ class Sampler(object):
             self.ema.to(self.device)
 
         self.model= self.accelerator.prepare(self.model)
+
+        self.normalize_result = normalize_result
 
     @property
     def device(self):
@@ -84,6 +87,10 @@ class Sampler(object):
         if return_all_timesteps:
             # [n, t, c, h, w] -> [t, n, c, h, w]
             all_images = torch.moveaxis(all_images, 0, 1)
+
+        # [-1,1] -> [0,1]
+        if self.normalize_result:
+            all_images = (all_images+1)*0.5
         
         if return_ndarr:
             return all_images.cpu().numpy()
@@ -103,6 +110,10 @@ class Sampler(object):
             else:
                 # [b, n, t, c, h, w] -> [b, t, n, c, h, w]
                 all_images = torch.moveaxis(all_images, 1, 2)
+
+        # [-1,1] -> [0,1]
+        if self.normalize_result:
+            all_images = (all_images+1)*0.5
         
         if return_ndarr:
             return all_images.cpu().numpy()
@@ -116,10 +127,6 @@ class Sampler(object):
         # 该方法会把灰度图保存成RGB图
         utils.save_image(images, path, nrow=nrow)
 
-    def save_tif(self, images, *, path, **kwags):
-        # images [n(b), c, h, w]
-        res = images.detach().cpu().numpy()
-        tiff.imwrite(path, res, **kwags)
     
     def save_png_with_records(self, images, *, folder, nrow=None, step=1):
         # common: [t, n, c, h, w]
@@ -141,10 +148,50 @@ class Sampler(object):
                 for t, item in enumerate(batch):
                     if t%step==0:
                         utils.save_image(item, os.path.join(folder, f'batch_{index}/',f'{t}.png'), nrow=nrow)
+    
+    def save_tif(self, images, *, folder: str, file_name: str=None, make_grid: bool=True,  **kwags):
+        # images [n(b), c, h, w]
+
+        # check folder
+        if not os.path.exists(folder):
+            os.mkdir(folder)
+
+        # check file_name
+        if file_name is not None:
+            assert file_name.endswith(('tif','tiff')), 'filename should end with "tif" or "tiff".'
+        else:
+            sample_type = 'ddim' if self.model.is_ddim_sampling else 'ddpm'
+            file_name = f'res_{sample_type}_{self.model.sampling_timesteps}s.tif'
+
+        save_path = os.path.join(folder, file_name)
+
+        # save result stack
+        res = images.detach().cpu().numpy()
+        tiff.imwrite(save_path, res, **kwags)
+
+        # save result as grid
+        if make_grid:
+            grid = utils.make_grid(images, nrow=int(np.sqrt(images.shape[0])), padding=0)
+            if images.shape[1]==1:
+                grid=grid[0]
+            index = save_path.find('.tif')
+            save_path = save_path[:index]+'_grid'+save_path[index:]
+            tiff.imwrite(save_path, grid.detach().cpu().numpy(), **kwags)
         
-    def save_tif_with_records(self, images, *, folder, step=1, padding=0, **kwargs):
+    def save_tif_with_records(self, images, *, folder: str, file_name: str=None, step=1, padding=0, **kwargs):
         # common: [t, n, c, h, w]
         # dps: [t, n, c, h, w] or [b, t, n, c, h, w]
+
+        # check file_name
+        if file_name is not None:
+            assert file_name.endswith(('tif','tiff')), 'filename should end with "tif" or "tiff".'
+        else:
+            sample_type = 'ddim' if self.model.is_ddim_sampling else 'ddpm'
+            file_name = f'batch0_{sample_type}_{self.model.sampling_timesteps}s.tif'
+            
+        # check folder
+        if not os.path.exists(folder):
+            os.mkdir(folder)
 
         # [t, n, c, h, w]
         res = []
@@ -156,7 +203,8 @@ class Sampler(object):
                     if c == 1:
                         grid=grid[0]
                     res.append(grid.detach().cpu().numpy())
-            tiff.imwrite(os.path.join(folder, 'records_one_batch.tif'), np.asarray(res), **kwargs)
+                
+            tiff.imwrite(os.path.join(folder, file_name), np.asarray(res), **kwargs)
         
         # [b, t, n, c, h, w]
         elif len(images.shape) == 6:
@@ -168,6 +216,8 @@ class Sampler(object):
                         if c == 1:
                             grid=grid[0]
                         res.append(grid.detach().cpu().numpy())
-                tiff.imwrite(os.path.join(folder, f'multi_batch/', f'batch_{index}_{t}.png'), np.asarray(res), **kwargs)
+                        
+                file_name = f'batch{index}_{sample_type}_{self.model.sampling_timesteps}s.tif'
+                tiff.imwrite(os.path.join(folder, file_name), np.asarray(res), **kwargs)
 
         
