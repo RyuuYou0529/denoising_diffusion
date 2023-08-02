@@ -12,11 +12,9 @@ denoising_diffusion_pytorch/
 
 |--- version.py # 保存模型时的version信息
 
-train_x.py # 训练低分辨率图像的diffusion model
+train.py #训练高分辨率图像的diffusion model
 
-train_y.py #训练高分辨率图像的diffusion model
-
-inference.ipynb # DPS实验主体
+inference.ipynb # DPS推理
 
 sample.ipynb # 测试sampler.py
 
