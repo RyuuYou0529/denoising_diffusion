@@ -1,16 +1,7 @@
-# ======
-# cell
-# ======
 __pycache__/
 checkpoints/
 
-dps_out
 sample_out
 
 log.txt
-*.png
 test.ipynb
-
-# degradation model
-denoising_diffusion_pytorch/degradation_model/checkpoint
-denoising_diffusion_pytorch/degradation_model/out

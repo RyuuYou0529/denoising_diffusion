@@ -1,6 +1,5 @@
 import math
 import copy
-from pathlib import Path
 from random import random
 from functools import partial
 from collections import namedtuple
@@ -10,15 +9,13 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-
 from torch.optim import Adam
-
 from torchvision import transforms as T, utils
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange
 
-from PIL import Image
 from tqdm.auto import tqdm
 from ema_pytorch import EMA
 
@@ -27,16 +24,12 @@ from accelerate import Accelerator
 from pytorch_fid.inception import InceptionV3
 from pytorch_fid.fid_score import calculate_frechet_distance
 
-from denoising_diffusion_pytorch.version import __version__
-
 # constants
-
 ModelPrediction =  namedtuple('ModelPrediction', ['pred_noise', 'pred_x_start'])
 
 # ====================
 # helpers functions
 # ====================
-
 def exists(x):
     return x is not None
 
@@ -72,7 +65,6 @@ def convert_image_to_fn(img_type, image):
 # ====================
 # normalization functions
 # ====================
-
 def normalize_to_neg_one_to_one(img):
     return img * 2 - 1
 
@@ -82,7 +74,6 @@ def unnormalize_to_zero_to_one(t):
 # ====================
 # small helper modules
 # ====================
-
 class Residual(nn.Module):
     def __init__(self, fn):
         super().__init__()
@@ -142,7 +133,6 @@ class PreNorm(nn.Module):
 # ====================
 # sinusoidal positional embeds
 # ====================
-
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -177,7 +167,6 @@ class RandomOrLearnedSinusoidalPosEmb(nn.Module):
 # ====================
 # building block modules
 # ====================
-
 class Block(nn.Module):
     def __init__(self, dim, dim_out, groups = 8):
         super().__init__()
@@ -209,7 +198,6 @@ class ResnetBlock(nn.Module):
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
     def forward(self, x, time_emb = None):
-
         scale_shift = None
         if exists(self.mlp) and exists(time_emb):
             time_emb = self.mlp(time_emb)
@@ -217,7 +205,6 @@ class ResnetBlock(nn.Module):
             scale_shift = time_emb.chunk(2, dim = 1)
 
         h = self.block1(x, scale_shift = scale_shift)
-
         h = self.block2(h)
 
         return h + self.res_conv(x)
@@ -279,7 +266,6 @@ class Attention(nn.Module):
 # ====================
 # model
 # ====================
-
 class Unet(nn.Module):
     def __init__(
         self,
@@ -412,7 +398,6 @@ class Unet(nn.Module):
 # ====================
 # gaussian diffusion class
 # ====================
-
 def extract(a, t, x_shape):
     b, *_ = t.shape
     out = a.gather(-1, t)
@@ -477,12 +462,9 @@ class GaussianDiffusion(nn.Module):
         assert not model.random_or_learned_sinusoidal_cond
 
         self.model = model
-
         self.channels = self.model.channels
         self.self_condition = self.model.self_condition
-
         self.image_size = image_size
-
         self.objective = objective
 
         assert objective in {'pred_noise', 'pred_x0', 'pred_v'}, 'objective must be either pred_noise (predict noise) or pred_x0 (predict image start) or pred_v (predict v [v-parameterization as defined in appendix D of progressive distillation paper, used in imagen-video successfully])'
@@ -495,7 +477,6 @@ class GaussianDiffusion(nn.Module):
             beta_schedule_fn = sigmoid_beta_schedule
         else:
             raise ValueError(f'unknown beta schedule {beta_schedule}')
-
         betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
 
         alphas = 1. - betas
@@ -507,7 +488,6 @@ class GaussianDiffusion(nn.Module):
         self.loss_type = loss_type
 
         # sampling related parameters
-
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
 
         assert self.sampling_timesteps <= timesteps
@@ -515,7 +495,6 @@ class GaussianDiffusion(nn.Module):
         self.ddim_sampling_eta = ddim_sampling_eta
 
         # helper function to register buffer from float64 to float32
-
         register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
 
         register_buffer('betas', betas)
@@ -523,7 +502,6 @@ class GaussianDiffusion(nn.Module):
         register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
-
         register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
         register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod))
         register_buffer('log_one_minus_alphas_cumprod', torch.log(1. - alphas_cumprod))
@@ -531,26 +509,21 @@ class GaussianDiffusion(nn.Module):
         register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1. / alphas_cumprod - 1))
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
-
         posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
         # above: equal to 1. / (1. / (1. - alpha_cumprod_tm1) + alpha_t / beta_t)
-
         register_buffer('posterior_variance', posterior_variance)
 
         # below: log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain
-
         register_buffer('posterior_log_variance_clipped', torch.log(posterior_variance.clamp(min =1e-20)))
         register_buffer('posterior_mean_coef1', betas * torch.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
         register_buffer('posterior_mean_coef2', (1. - alphas_cumprod_prev) * torch.sqrt(alphas) / (1. - alphas_cumprod))
 
         # derive loss weight
         # snr - signal noise ratio
-
         snr = alphas_cumprod / (1 - alphas_cumprod)
 
         # https://arxiv.org/abs/2303.09556
-
         maybe_clipped_snr = snr.clone()
         if min_snr_loss_weight:
             maybe_clipped_snr.clamp_(max = min_snr_gamma)
@@ -563,10 +536,10 @@ class GaussianDiffusion(nn.Module):
             register_buffer('loss_weight', maybe_clipped_snr / (snr + 1))
 
         # auto-normalization of data [0, 1] -> [-1, 1] - can turn off by setting it to be False
-
         self.normalize = normalize_to_neg_one_to_one if auto_normalize else identity
         self.unnormalize = unnormalize_to_zero_to_one if auto_normalize else identity
 
+    #  === methods ===
     def predict_start_from_noise(self, x_t, t, noise):
         return (
             extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
@@ -644,6 +617,7 @@ class GaussianDiffusion(nn.Module):
         pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
         return pred_img, x_start
 
+    # DDPM
     @torch.no_grad()
     def p_sample_loop(self, shape, return_all_timesteps = False):
         batch, device = shape[0], self.betas.device
@@ -663,6 +637,7 @@ class GaussianDiffusion(nn.Module):
         ret = self.unnormalize(ret)
         return ret
 
+    # DDIM
     @torch.no_grad()
     def ddim_sample(self, shape, return_all_timesteps = False):
         batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
@@ -675,7 +650,7 @@ class GaussianDiffusion(nn.Module):
         imgs = [img]
 
         x_start = None
-
+        print(time_pairs)
         for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device = device, dtype = torch.long)
             self_cond = x_start if self.self_condition else None
@@ -795,93 +770,16 @@ class GaussianDiffusion(nn.Module):
         return self.p_losses(img, t, *args, **kwargs)
 
 # ====================
-# dataset classes
-# ====================
-
-class Dataset(Dataset):
-    def __init__(
-        self,
-        folder,
-        image_size,
-        exts = ['jpg', 'jpeg', 'png', 'tiff'],
-        augment_horizontal_flip = False,
-        convert_image_to = None
-    ):
-        super().__init__()
-        self.folder = folder
-        self.image_size = image_size
-        self.paths = [p for ext in exts for p in Path(f'{folder}').glob(f'**/*.{ext}')]
-
-        maybe_convert_fn = partial(convert_image_to_fn, convert_image_to) if exists(convert_image_to) else nn.Identity()
-
-        self.transform = T.Compose([
-            T.Lambda(maybe_convert_fn),
-            T.Resize(image_size),
-            T.RandomHorizontalFlip() if augment_horizontal_flip else nn.Identity(),
-            T.CenterCrop(image_size),
-            T.ToTensor()
-        ])
-
-    def __len__(self):
-        return len(self.paths)
-
-    def __getitem__(self, index):
-        path = self.paths[index]
-        img = Image.open(path)
-        return self.transform(img)
-    
-# ====================
-# npz dataloader
-# ====================
-
-import numpy as np
-class npz_dataset(Dataset):
-    def __init__(self, path, npz_file_name, normalize_mode: str='min_max'):
-        file = np.load(path)
-        self.data = torch.from_numpy(file[npz_file_name])
-        self.len = self.data.shape[0]
-
-        self.normalize = lambda t:(t-t.mean())/(t.std())
-        self.scale = lambda t:(t - t.min())/(t.max()-t.min())
-        self.normalize_mode = normalize_mode
-
-        assert normalize_mode in ['z_score', 'min_max', None], 'Invalid args: "normalize_mode"'
-        if normalize_mode == 'z_score':
-            self.normalize = lambda t:(t-t.mean())/(t.std())
-        elif normalize_mode == 'min_max':
-            self.normalize = lambda t:(t - t.min())/(t.max()-t.min())
-        else:
-            self.normalize = identity
-
-    def __len__(self):
-        return self.len
-    
-    def __getitem__(self, index):
-        item = self.normalize(self.data[index])
-        return item
-
-# ====================
-# lr scheduler
-# ====================
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-# ====================
 # trainer class
 # ====================
-
 class Trainer(object):
     def __init__(
         self,
         diffusion_model,
-        path,
+         dataset = None,
         *,
-        dataset_type: str='npz',
-        npz_file_name = 'Y',
-        normalize_mode = 'min_max',
-        if_lr_scheduler = False,
         train_batch_size = 16,
         gradient_accumulate_every = 1,
-        augment_horizontal_flip = True,
         train_lr = 1e-4,
         train_num_steps = 100000,
         ema_update_every = 10,
@@ -893,30 +791,24 @@ class Trainer(object):
         amp = False,
         fp16 = False,
         split_batches = True,
-        convert_image_to = None,
         calculate_fid = True,
         inception_block_idx = 2048
     ):
         super().__init__()
 
         # accelerator
-
         self.accelerator = Accelerator(
             split_batches = split_batches,
             mixed_precision = 'fp16' if fp16 else 'no'
         )
-
         self.accelerator.native_amp = amp
 
         # model
-
         self.model = diffusion_model
         self.channels = diffusion_model.channels
 
         # InceptionV3 for fid-score computation
-
         self.inception_v3 = None
-
         if calculate_fid:
             assert inception_block_idx in InceptionV3.BLOCK_INDEX_BY_DIM
             block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[inception_block_idx]
@@ -924,40 +816,24 @@ class Trainer(object):
             self.inception_v3.to(self.device)
 
         # sampling and training hyperparameters
-
         assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
         self.num_samples = num_samples
         self.save_and_sample_every = save_and_sample_every
 
+        self.image_size = diffusion_model.image_size
         self.batch_size = train_batch_size
+        self.train_num_steps = train_num_steps
         self.gradient_accumulate_every = gradient_accumulate_every
 
-        self.train_num_steps = train_num_steps
-        self.image_size = diffusion_model.image_size
-
-        # dataset and dataloader
-        assert dataset_type in ['npz', 'folder'], 'Invalid args: [data_type]'
-        if dataset_type == 'npz':
-            self.ds = npz_dataset(path=path, npz_file_name=npz_file_name, normalize_mode=normalize_mode)
-        elif dataset_type == 'folder':
-            self.ds = Dataset(path, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
-
+        self.ds = dataset
         dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
-
         dl = self.accelerator.prepare(dl)
         self.dl = cycle(dl)
 
         # optimizer
-
         self.opt = Adam(diffusion_model.parameters(), lr = train_lr, betas = adam_betas)
 
-        # lr scheduler
-        self.if_lr_scheduler = if_lr_scheduler
-        self.scheduler = ReduceLROnPlateau(self.opt, mode='min', factor=0.2, patience=10, min_lr=0., ) if if_lr_scheduler else None
-
-
         # for logging results in a folder periodically
-
         if self.accelerator.is_main_process:
             self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
             self.ema.to(self.device)
@@ -966,12 +842,10 @@ class Trainer(object):
         self.results_folder.mkdir(exist_ok = True)
 
         # step counter state
-
         self.step = 0
 
         # prepare model, dataloader, optimizer with accelerator
-
-        self.model, self.opt, self.scheduler= self.accelerator.prepare(self.model, self.opt, self.scheduler)
+        self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
 
     @property
     def device(self):
@@ -987,16 +861,8 @@ class Trainer(object):
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
-            'version': __version__
         }
-
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
-    
-    def save_unet_only(self, path):
-        if not self.accelerator.is_local_main_process:
-            return
-
-        torch.save(self.accelerator.get_state_dict(self.model.model), path)
 
     def load(self, *, milestone=None, use_path=False, path=''):
         accelerator = self.accelerator
@@ -1014,9 +880,6 @@ class Trainer(object):
         self.opt.load_state_dict(data['opt'])
         if self.accelerator.is_main_process:
             self.ema.load_state_dict(data["ema"])
-
-        if 'version' in data:
-            print(f"loading from: [version]:{data['version']}; [step]:{data['step']}")
 
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
@@ -1073,9 +936,6 @@ class Trainer(object):
 
                 self.opt.step()
                 self.opt.zero_grad()
-
-                if self.if_lr_scheduler:
-                    self.scheduler.step(total_loss)
 
                 accelerator.wait_for_everyone()
 

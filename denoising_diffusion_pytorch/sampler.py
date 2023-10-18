@@ -8,6 +8,7 @@ import math
 import os
 import tifffile as tiff
 import numpy as np
+from matplotlib import pyplot as plt
 
 def exists(x):
     return x is not None
@@ -98,6 +99,7 @@ class Sampler(object):
             return all_images
     
     def dps(self, measurement, operator, num_samples=16, scale=1, return_all_timesteps=False, return_ndarr=False):
+        self.step_size = scale
         # [n, (t), c, h, w] or [b, n, (t), c, h, w]
         all_images = self.ema.ema_model.dps(measurement=measurement, operator=operator, 
                                             num_samples=num_samples, scale=scale, 
@@ -119,42 +121,13 @@ class Sampler(object):
             return all_images.cpu().numpy()
         else:
             return all_images
-
-    def save_png(self, images, *, path, nrow=None):
-        # images [n(b), c, h, w]
-        if nrow is None:
-            nrow = int(math.sqrt(images.shape[0]))
-        # 该方法会把灰度图保存成RGB图
-        utils.save_image(images, path, nrow=nrow)
-
-    
-    def save_png_with_records(self, images, *, folder, nrow=None, step=1):
-        # common: [t, n, c, h, w]
-        # dps: [t, n, c, h, w] or [b, t, n, c, h, w]
-
-        # [t, n, c, h, w]
-        if len(images.shape) == 5:
-            if nrow is None:
-                nrow = int(math.sqrt(images.shape[1]))
-            for t, item in enumerate(images):
-                if t%step==0:
-                    utils.save_image(item, os.path.join(folder, f'{t}.png'), nrow=nrow)
-        
-        # [b, t, n, c, h, w]
-        elif len(images.shape) == 6:
-            if nrow is None:
-                nrow = int(math.sqrt(images.shape[2]))
-            for index, batch in enumerate(images):
-                for t, item in enumerate(batch):
-                    if t%step==0:
-                        utils.save_image(item, os.path.join(folder, f'batch_{index}/',f'{t}.png'), nrow=nrow)
     
     def save_tif(self, images, *, folder: str, file_name: str=None, make_grid: bool=True,  **kwags):
         # images [n(b), c, h, w]
 
         # check folder
         if not os.path.exists(folder):
-            os.mkdir(folder)
+            os.makedirs(folder)
 
         # check file_name
         if file_name is not None:
@@ -191,7 +164,7 @@ class Sampler(object):
             
         # check folder
         if not os.path.exists(folder):
-            os.mkdir(folder)
+            os.makedirs(folder)
 
         # [t, n, c, h, w]
         res = []
@@ -219,5 +192,40 @@ class Sampler(object):
                         
                 file_name = f'batch{index}_{sample_type}_{self.model.sampling_timesteps}s.tif'
                 tiff.imwrite(os.path.join(folder, file_name), np.asarray(res), **kwargs)
+    
+    def save_histc(self, t: torch.Tensor, bins=256, save_path: str=None, file_name=None, if_show: bool=True):
+        assert len(t.shape) == 4, "The length of the tensor's shape must be 5."
+        b, c, h, w = t.shape
 
+        if file_name is not None:
+            assert file_name.endswith(('jpg','png', 'jpeg')), 'filename should end with "jpg" or "png".'
+        else:
+            sample_type = 'ddim' if self.model.is_ddim_sampling else 'ddpm'
+            file_name = f'histc_{sample_type}_{self.model.sampling_timesteps}s.png'
+
+        res = []
+        ranges = []
+        width = []
+        for i in range(b):
+            res.append(torch.histc(t[i], bins=bins).cpu().numpy())
+            min = t[i].min().cpu().item()
+            max = t[i].max().cpu().item()
+            ranges.append(np.linspace(min,  max, bins))
+            width.append((max-min)/bins)
+        res = np.asarray(res)
+        
+        num = int(np.sqrt(b))
+        plt.figure(figsize=(15, 10))
+        for row in range(num):
+            for col in range(num):
+                index = row*num+col
+                plt.subplot(num, num, index+1)
+                plt.bar(x=ranges[index] ,height=res[index], width=width[index])
+        if save_path is not None:
+            plt.savefig(os.path.join(save_path, file_name))
+        if if_show:
+            plt.show()
+    
+    def ddnm(self, measurement, deg, sigma_y, num_samples=16, return_all_timesteps = False):
+        return self.model.ddnm(measurement, deg, sigma_y, num_samples, return_all_timesteps)
         
